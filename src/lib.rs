@@ -31,6 +31,8 @@ extern crate base64;
 #[macro_use]
 extern crate error_chain;
 #[macro_use]
+extern crate lazy_static;
+#[macro_use]
 extern crate log;
 extern crate rand;
 extern crate reqwest;
@@ -39,8 +41,8 @@ extern crate time;
 extern crate url;
 use rand::Rng;
 use reqwest::{Client, RequestBuilder, StatusCode};
-use reqwest::header::{Authorization, ContentType, Headers};
-use reqwest::mime::{Mime, SubLevel, TopLevel};
+use reqwest::header::{Authorization, ContentType};
+use reqwest::mime;
 use ring::digest;
 use ring::hmac;
 use std::borrow::Cow;
@@ -63,6 +65,10 @@ error_chain! {
             display("HTTP status error: {}", status)
         }
     }
+}
+
+lazy_static! {
+    static ref CLIENT: Client = Client::new();
 }
 
 /// Token structure for the OAuth
@@ -264,11 +270,7 @@ pub fn get(uri: &str,
         format!("{}", uri)
     };
 
-    let mut headers = Headers::new();
-    headers.set(Authorization(header));
-
-    let req = Client::new()?.get(&req_uri).headers(headers);
-    let rsp = send(req)?;
+    let rsp = send(CLIENT.get(&req_uri).header(Authorization(header)))?;
     Ok(rsp)
 }
 
@@ -291,23 +293,21 @@ pub fn post(uri: &str,
             -> Result<Vec<u8>> {
     let (header, body) = get_header("POST", uri, consumer, token, other_param);
 
-    let mut headers = Headers::new();
-    headers.set(Authorization(header));
-    headers.set(ContentType(Mime(TopLevel::Application, SubLevel::WwwFormUrlEncoded, vec![])));
-
-    let req = Client::new()?
-        .post(uri)
-        .body(body.as_str())
-        .headers(headers);
-    let rsp = send(req)?;
+    let rsp = send(
+        CLIENT
+            .post(uri)
+            .body(body)
+            .header(Authorization(header))
+            .header(ContentType(mime::APPLICATION_WWW_FORM_URLENCODED)),
+    )?;
     Ok(rsp)
 }
 
 /// Send request to the server
-fn send(builder: RequestBuilder) -> Result<Vec<u8>> {
+fn send(builder: &mut RequestBuilder) -> Result<Vec<u8>> {
     let mut response = builder.send()?;
-    if *response.status() != StatusCode::Ok {
-        bail!(ErrorKind::HttpStatus(*response.status()));
+    if response.status() != StatusCode::Ok {
+        bail!(ErrorKind::HttpStatus(response.status()));
     }
     let mut buf = vec![];
     let _ = response.read_to_end(&mut buf)?;
